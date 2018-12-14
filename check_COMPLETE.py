@@ -23,6 +23,7 @@ def check_all():
         for block in range(1,len(invalid_blocks)):
             if invalid_blocks[block] == 97423:
                 invalid_blocks[block] = -1
+                print("I have forgiven block 97423 because its double spent input was from a block that I found to be invalid (204751). So I will consider 97423's spend valid.")
         #
         comingFromInvalidBlock(data)
         # comingFromInvalidBlock(data)
@@ -77,9 +78,15 @@ def serialControlPure(data):
     print(unique)
 
 outputTransactionDict = {}
+AddressOfUTXOs = {}
+balanceOfUTXOs = {}
 accounts = {}
+aliasesToMainAccounts = {}
+account_balances = {}
 
-def idiomsBacktrace():
+def findEntity():
+    addresses =[139024,138183,139024,138183,139024,138183,139024,138183,139024,138183,139024,138183,139024,138183,139024,138183,139024,138183]
+
     with open('TX_COMPLETE.json') as file:
         data = json.load(file)
     ValueOfAddresses = {} # The balance of particular addresses (address: value)
@@ -87,6 +94,7 @@ def idiomsBacktrace():
     for UTXO in remaining_UTXOs: # Address of UTXO remaining.
         address = UTXO[2]
         ValueOfAddresses[address] = 0
+        AddressOfUTXOs[UTXO[0]] = UTXO[2]
     for UTXO in remaining_UTXOs: # Total value of an address.
         address = UTXO[2]
         ValueOfAddresses[address] += UTXO[1]
@@ -110,8 +118,55 @@ def idiomsBacktrace():
             for input_address in tx["input_addresses"]:
                     addToAccount(input_address, accounts[address])
 
-    for n in range(1,900):
-        for address in ValueOfAddresses:
+    for address in accounts:
+        account_balances[address] = 0
+        for alias in accounts[address]:
+            if alias in ValueOfAddresses:
+                account_balances[address] += ValueOfAddresses[alias]
+
+    for address in accounts:
+        for alias in accounts[address]:
+            aliasesToMainAccounts[alias] = address
+
+    for address in addresses:
+        if address in aliasesToMainAccounts:
+            print(aliasesToMainAccounts[address])
+
+def idiomsBacktrace():
+    with open('TX_COMPLETE.json') as file:
+        data = json.load(file)
+    ValueOfAddresses = {} # The balance of particular addresses (address: value)
+    # UTXO { id, balance, address paid toward}
+    for UTXO in remaining_UTXOs: # Address of UTXO remaining.
+        address = UTXO[2]
+        ValueOfAddresses[address] = 0
+        AddressOfUTXOs[UTXO[0]] = UTXO[2]
+    for UTXO in remaining_UTXOs: # Total value of an address.
+        address = UTXO[2]
+        ValueOfAddresses[address] += UTXO[1]
+
+    for tx in valid_txs:
+        for output_address in tx["output_addresses"]:
+            outputTransactionDict[output_address] = tx["txid"]
+
+    for address in ValueOfAddresses:
+        accounts[address] = []
+        addToAccount(address, accounts[address])
+
+    for address in ValueOfAddresses:
+        txid = outputTransactionDict[address]
+        tx = data["all"][txid-1]
+        outcount = 0
+        for output_val in tx["output_values"]:
+            if output_val > 0:
+                outcount += 1
+        if outcount == 1:
+            for input_address in tx["input_addresses"]:
+                    addToAccount(input_address, accounts[address])
+
+
+    for address in ValueOfAddresses:
+        for n in range(1,300000):
             if len(accounts[address]) > n:
                 txid = accounts[address][n]
                 tx = data["all"][txid-1]
@@ -122,6 +177,63 @@ def idiomsBacktrace():
                 if outcount == 1:
                     for input_address in tx["input_addresses"]:
                             addToAccount(input_address, accounts[address])
+
+    for address in accounts:
+        account_balances[address] = 0
+        for alias in accounts[address]:
+            if alias in ValueOfAddresses:
+                account_balances[address] += ValueOfAddresses[alias]
+
+    maxbalance = 0
+    accounthead = 0
+    count = 0
+    for account in account_balances:
+        if account_balances[account] > maxbalance:
+            count = 0
+            maxbalance = account_balances[account]
+            accounthead = account
+        elif account_balances[account] == maxbalance:
+            count += 1
+    if count > 0:
+        print("More than one leader.")
+    print("Max account header:",accounthead,":",maxbalance)
+
+    minaddress = 99999999
+    for alias in accounts[accounthead]:
+        if alias < minaddress:
+            minaddress = alias
+    print("Min address of that account:", minaddress)
+
+    for address in accounts:
+        for alias in accounts[address]:
+            aliasesToMainAccounts[alias] = address
+
+    bestSender = -1
+    currentHigh = 0
+    bestTx = -1
+
+    for alias in accounts[accounthead]:
+        txid = outputTransactionDict[alias]
+        tx = data["all"][txid-1]
+        ind = -1
+        for output_address in tx["output_addresses"]:
+            one_sender = True
+            sender = -1
+            idx = 0
+            ind += 1
+            for input_address in tx["input_addresses"]:
+                if idx > 0 and sender!=aliasesToMainAccounts[input_address]:
+                    one_sender = False
+                print(input_address, "->",output_address,"Value:",tx["output_values"][ind])
+                sender = aliasesToMainAccounts[input_address]
+                idx += 1
+            if one_sender == True and sender != aliasesToMainAccounts[output_address] and tx["output_values"][ind] > currentHigh:
+                currentHigh = tx["output_values"][ind]
+                bestSender = sender
+                bestTx = tx
+
+    print(accounts[accounthead])
+
 
 
 def addToAccount(address, account):
@@ -153,7 +265,7 @@ def lastBlockCount(data):
         if spentOrNot[UTXO] == 'unspent':
             remaining_UTXOs.append([UTXO,seen_UTXOs[UTXO],remaining_UTXOs_owners[UTXO]])
 
-    print("Really, there are", len(remaining_UTXOs)," UTXOs left as of last block.")
+    print("There are", len(remaining_UTXOs)," unspent TXOs left as of last block.")
     max_value = 0
     max_set = []
     for utxo in remaining_UTXOs:
@@ -164,7 +276,7 @@ def lastBlockCount(data):
         elif utxo[1] == max:
             max_set.append(utxo[0])
 
-    print("Max value", max_value, " of UTXOs", max_set)
+    print("Max value", max_value, " of UTXOs:", max_set)
 
 
 def origCount(data):
@@ -409,6 +521,8 @@ def check(data):
     # addressNull(data)
     valueNull(data)
 
-check_all()
+# check_all()
 
-idiomsBacktrace()
+# idiomsBacktrace()
+
+findEntity()
