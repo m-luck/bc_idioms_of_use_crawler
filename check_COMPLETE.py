@@ -6,22 +6,18 @@ import operator
 
 invalid_blocks = []
 seen_ib = []
+valid_txs = []
+identities = {}
+address_balances = {}
+remaining_UTXOs = []
+remaining_UTXOs_owners = {}
+rc = 0
+
+with open('TX_COMPLETE.json') as file:
+    data = json.load(file)
 
 def check_all():
-    with open('TX_COMPLETE.json') as file:
-        data = json.load(file)
-        inputsLessThanOutputs(data)
-        duplicateInUTXO(data)
-        duplicateOutUTXO(data)
-        # duplicateAddressFromCoinbase(data)
-        noOutputs(data)
-        noInputs(data)
-        coinbaseWithInput(data)
-        coinbaseWithWrongReward(data)
-        multipleRewardsPerBlock(data)
-        inputCreatedBeforeOutput(data)
-        # addressNull(data)
-        valueNull(data)
+        check(data)
         count = 1
 
         for block in range(1,len(invalid_blocks)):
@@ -45,24 +41,131 @@ def check_all():
         f.close()
 
         lastBlockCount(data)
-        origCount(data)
-        print(seen_ib)
+        # origCount(data)
+        print("Blocks invalidated:",seen_ib)
+
+def serialControlPure(data):
+    identity_index = 0
+    for tx in data['all']:
+        for output in tx["output_addresses"]:
+            identities[output] = -1
+            address_balances[output] = 0
+    for tx in data['all']:
+        positive_out_count = 0
+        linked_address = 0
+        out_index = -1
+        for output in tx["outputs"]:
+            out_index += 1
+            if output != 0:
+                positive_out_count += 1
+                linked_address = tx["output_addresses"][out_index]
+        if positive_out_count == 1:
+            address_balances[tx["output_addresses"][out_index]] += tx["output_values"][out_index]
+            for input in tx["input_addresses"]:
+                if identities[input] != -1:
+                    identities[linked_address] = identities[input]
+                elif identities[linked_address] != -1:
+                    identities[input] = identities[linked_address]
+                else:
+                    identities[linked_address] = identity_index
+                    identities[input] = identity_index
+                    identity_index += 1
+    unique = []
+    for address in identities:
+        if identities[address] not in unique:
+            unique.append(identities[address])
+    print(unique)
+
+outputTransactionDict = {}
+accounts = {}
+
+def idiomsBacktrace():
+    with open('TX_COMPLETE.json') as file:
+        data = json.load(file)
+    ValueOfAddresses = {} # The balance of particular addresses (address: value)
+    # UTXO { id, balance, address paid toward}
+    for UTXO in remaining_UTXOs: # Address of UTXO remaining.
+        address = UTXO[2]
+        ValueOfAddresses[address] = 0
+    for UTXO in remaining_UTXOs: # Total value of an address.
+        address = UTXO[2]
+        ValueOfAddresses[address] += UTXO[1]
+
+    for tx in valid_txs:
+        for output_address in tx["output_addresses"]:
+            outputTransactionDict[output_address] = tx["txid"]
+
+    for address in ValueOfAddresses:
+        accounts[address] = []
+        addToAccount(address, accounts[address])
+
+    for address in ValueOfAddresses:
+        txid = outputTransactionDict[address]
+        tx = data["all"][txid-1]
+        outcount = 0
+        for output_val in tx["output_values"]:
+            if output_val > 0:
+                outcount += 1
+        if outcount == 1:
+            for input_address in tx["input_addresses"]:
+                    addToAccount(input_address, accounts[address])
+
+    for n in range(1,900):
+        for address in ValueOfAddresses:
+            if len(accounts[address]) > n:
+                txid = accounts[address][n]
+                tx = data["all"][txid-1]
+                outcount = 0
+                for output_val in tx["output_values"]:
+                    if output_val > 0:
+                        outcount += 1
+                if outcount == 1:
+                    for input_address in tx["input_addresses"]:
+                            addToAccount(input_address, accounts[address])
+
+
+def addToAccount(address, account):
+    account.append(address)
 
 def lastBlockCount(data):
-    valid_txs = []
     for tx in data['all']:
         if tx["block"] not in seen_ib:
             valid_txs.append(tx)
     seen_UTXOs = {}
+    spentOrNot = {}
     for tx in valid_txs:
         count = 0
         for output in tx["outputs"]:
             seen_UTXOs[output] = tx["output_values"][count]
+            spentOrNot[output] = 'unspent'
+            remaining_UTXOs_owners[output] = tx["output_addresses"][count]
             count += 1
-    print(len(seen_UTXOs), "UTXOs remaining...")
+        count = 0
+    # print(len(seen_UTXOs), "UTXOs remaining...")
 
-    max_UTXO = max(seen_UTXOs.items(), key=operator.itemgetter(1))
-    print("Max", max_UTXO)
+    # max_UTXO = max(seen_UTXOs.items(), key=operator.itemgetter(1))
+    # print("Max", max_UTXO)
+
+    for tx in valid_txs:
+        for input in tx["inputs"]:
+             spentOrNot[input] = 'spent'
+    for UTXO in spentOrNot:
+        if spentOrNot[UTXO] == 'unspent':
+            remaining_UTXOs.append([UTXO,seen_UTXOs[UTXO],remaining_UTXOs_owners[UTXO]])
+
+    print("Really, there are", len(remaining_UTXOs)," UTXOs left as of last block.")
+    max_value = 0
+    max_set = []
+    for utxo in remaining_UTXOs:
+        if utxo[1] > max_value:
+            max_set = []
+            max_set.append(utxo[0])
+            max_value = utxo[1]
+        elif utxo[1] == max:
+            max_set.append(utxo[0])
+
+    print("Max value", max_value, " of UTXOs", max_set)
+
 
 def origCount(data):
     seen_UTXOs = {}
@@ -292,4 +395,20 @@ def comingFromInvalidBlock(data):
             invalid_blocks.append(block[0])
             tracker = block
 
+def check(data):
+    inputsLessThanOutputs(data)
+    duplicateInUTXO(data)
+    duplicateOutUTXO(data)
+    # duplicateAddressFromCoinbase(data)
+    noOutputs(data)
+    noInputs(data)
+    coinbaseWithInput(data)
+    coinbaseWithWrongReward(data)
+    multipleRewardsPerBlock(data)
+    inputCreatedBeforeOutput(data)
+    # addressNull(data)
+    valueNull(data)
+
 check_all()
+
+idiomsBacktrace()
